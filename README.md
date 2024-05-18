@@ -26,7 +26,7 @@ The `FTPKicker` script is designed to monitor the status of the `vcc` service on
 
 1. Clone the repository:
     ```bash
-    git clone https://github.com/yourusername/ftpkicker.git
+    git clone https://github.com/tehsideshow/ftpkicker.git
     ```
 
 2. Navigate to the script directory:
