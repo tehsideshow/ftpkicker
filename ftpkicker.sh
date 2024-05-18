@@ -2,7 +2,7 @@
 
 # Define the log file path
 LOG_FILE="/home/five9inf/vcc-work/log/server.log"
-MAX_THREADS=2000  # Maximum thread limit for the JVM
+MAX_THREADS=2600  # Adjusted maximum thread limit for the JVM
 
 # Function to display a message in green
 green_message() {
@@ -38,12 +38,12 @@ check_jvm_health() {
     fi
   done
 
-  JVM_THREAD_REMAINING_PERCENT=$(echo "scale=2; 100 - (($JVM_THREAD_COUNT * 100) / $MAX_THREADS)" | bc)
-  JVM_THREAD_USAGE_PERCENT=$(echo "scale=2; (($JVM_THREAD_COUNT * 100) / $MAX_THREADS)" | bc)
+  JVM_THREAD_USAGE_PERCENT=$(echo "scale=2; ($JVM_THREAD_COUNT * 100) / $MAX_THREADS" | bc)
+  JVM_THREAD_REMAINING_PERCENT=$(echo "scale=2; 100 - $JVM_THREAD_USAGE_PERCENT" | bc)
 
   green_message "JVM Active Thread Count: $JVM_THREAD_COUNT"
-  green_message "JVM Thread Remaining: $JVM_THREAD_REMAINING_PERCENT%"
   green_message "JVM Thread Usage: $JVM_THREAD_USAGE_PERCENT%"
+  green_message "JVM Thread Remaining: $JVM_THREAD_REMAINING_PERCENT%"
 }
 
 # Initial check of JVM health
@@ -138,7 +138,7 @@ else
   if echo "$STATUS_OUTPUT" | grep -q "Broken pipe"; then
     red_message "There is likely an issue with the vcc service (Broken pipe)."
     read -p "Would you like to run 'sudo service vcc restart' on the host? (yes/no): " RESTART_CHOICE
-    if [ "$RESTART_CHOICE" == "yes" ]; then
+    if [ "$RESTART_CHOICE" == "yes"; then
       # Check system health and JVM health before restart
       check_system_health
       check_jvm_health
