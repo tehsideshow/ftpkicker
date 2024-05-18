@@ -2,6 +2,7 @@
 
 # Define the log file path
 LOG_FILE="/home/five9inf/vcc-work/log/server.log"
+MAX_THREADS=2000  # Maximum thread limit for the JVM
 
 # Function to display a message in green
 green_message() {
@@ -18,6 +19,36 @@ red_message() {
   echo -e "\e[31m$1\e[0m"
 }
 
+# Function to check JVM health for vcc service using /proc
+check_jvm_health() {
+  yellow_message "Checking JVM health for vcc service..."
+  JVM_PID=$(pgrep -f vcc)
+
+  if [ -z "$JVM_PID" ]; then
+    echo "Could not find the JVM process for vcc service."
+    return
+  fi
+
+  JVM_THREAD_COUNT=0
+
+  for PID in $JVM_PID; do
+    if [ -d /proc/$PID ]; then
+      THREADS=$(grep Threads /proc/$PID/status | awk '{print $2}')
+      JVM_THREAD_COUNT=$((JVM_THREAD_COUNT + THREADS))
+    fi
+  done
+
+  JVM_THREAD_REMAINING_PERCENT=$(echo "scale=2; 100 - (($JVM_THREAD_COUNT * 100) / $MAX_THREADS)" | bc)
+  JVM_THREAD_USAGE_PERCENT=$(echo "scale=2; (($JVM_THREAD_COUNT * 100) / $MAX_THREADS)" | bc)
+
+  green_message "JVM Active Thread Count: $JVM_THREAD_COUNT"
+  green_message "JVM Thread Remaining: $JVM_THREAD_REMAINING_PERCENT%"
+  green_message "JVM Thread Usage: $JVM_THREAD_USAGE_PERCENT%"
+}
+
+# Initial check of JVM health
+check_jvm_health
+
 # Check the status of the vcc service
 STATUS_OUTPUT=$(sudo service vcc status)
 
@@ -30,51 +61,13 @@ check_system_health() {
   green_message "$MEMORY_USAGE"
 }
 
-# Function to check JVM health for vcc service
-check_jvm_health() {
-  yellow_message "Checking JVM health for vcc service..."
-  JVM_PID=$(pgrep -f vcc)
-
-  if [ -z "$JVM_PID" ]; then
-    echo "Could not find the JVM process for vcc service."
-    return
-  fi
-
-  JVM_MEMORY_USED=0
-  JVM_MEMORY_MAX=0
-
-  for PID in $JVM_PID; do
-    if [ -d /proc/$PID ]; then
-      USED=$(grep VmRSS /proc/$PID/status | awk '{print $2}')
-      MAX=$(grep VmSize /proc/$PID/status | awk '{print $2}')
-
-      JVM_MEMORY_USED=$((JVM_MEMORY_USED + USED))
-      JVM_MEMORY_MAX=$((JVM_MEMORY_MAX + MAX))
-    fi
-  done
-
-  if [ -z "$JVM_MEMORY_USED" ] || [ -z "$JVM_MEMORY_MAX" ] || [ "$JVM_MEMORY_MAX" -eq 0 ]; then
-    echo "Could not retrieve JVM memory information."
-    return
-  fi
-
-  JVM_MEMORY_USED=$(($JVM_MEMORY_USED / 2))
-  JVM_MEMORY_MAX=$(($JVM_MEMORY_MAX / 2))
-
-  JVM_MEMORY_USED_MB=$(echo "$JVM_MEMORY_USED / 1024" | bc)
-  JVM_MEMORY_MAX_MB=$(echo "$JVM_MEMORY_MAX / 1024" | bc)
-  JVM_MEMORY_REMAINING_PERCENT=$(echo "scale=2; 100 - (($JVM_MEMORY_USED / $JVM_MEMORY_MAX) * 100)" | bc)
-
-  green_message "JVM Memory Usage: $JVM_MEMORY_USED_MB MB / $JVM_MEMORY_MAX_MB MB"
-  green_message "JVM Memory Remaining: $JVM_MEMORY_REMAINING_PERCENT%"
-}
-
 # Function to grep and count occurrences in the log file
 grep_and_count() {
   local pattern=$1
-  local result=$(grep "$pattern" "$LOG_FILE" | awk -v d1="$(date --date='15 minutes ago' '+%Y-%m-%d %H:%M:%S')" -v d2="$(date '+%Y-%m-%d %H:%M:%S')" '$0 >= d1 && $0 <= d2')
-  local count=$(echo "$result" | wc -l)
-  local last_entry=$(echo "$result" | tail -1)
+  local from_time=$(date --date='15 minutes ago' '+%Y-%m-%d %H:%M:%S')
+  local to_time=$(date '+%Y-%m-%d %H:%M:%S')
+  local count=$(egrep "$pattern" "$LOG_FILE" | awk -v d1="$from_time" -v d2="$to_time" '$0 >= d1 && $0 <= d2' | wc -l)
+  local last_entry=$(egrep "$pattern" "$LOG_FILE" | awk -v d1="$from_time" -v d2="$to_time" '$0 >= d1 && $0 <= d2' | tail -1)
   echo "$count:$last_entry"
 }
 
@@ -109,9 +102,14 @@ check_logs_and_suggest_restart() {
     echo "There have been more than 0 'Broken pipe' or 'ignored - low memory' occurrences in the past 15 minutes. It is suggested to restart the FTP host."
     read -p "Would you like to run 'sudo service vcc restart' on the host? (yes/no): " RESTART_CHOICE
     if [ "$RESTART_CHOICE" == "yes" ]; then
-      echo "Restarting the FTP host..."
-      sudo service vcc restart
+      # Check system health and JVM health before restart
+      check_system_health
+      check_jvm_health
       green_message "The host is restarting."
+      sudo service vcc restart
+      # Check system health and JVM health after restart
+      check_system_health
+      check_jvm_health
     else
       echo "Skipping the restart."
     fi
@@ -138,13 +136,26 @@ if echo "$STATUS_OUTPUT" | grep -q "Overall status: STARTED"; then
 else
   # Check for "Broken pipe" in the status output
   if echo "$STATUS_OUTPUT" | grep -q "Broken pipe"; then
-    red_message "There is likely an issue with the vcc service (Broken pipe). Checking the logs..."
+    red_message "There is likely an issue with the vcc service (Broken pipe)."
+    read -p "Would you like to run 'sudo service vcc restart' on the host? (yes/no): " RESTART_CHOICE
+    if [ "$RESTART_CHOICE" == "yes" ]; then
+      # Check system health and JVM health before restart
+      check_system_health
+      check_jvm_health
+      green_message "The host is restarting."
+      sudo service vcc restart
+      # Check system health and JVM health after restart
+      check_system_health
+      check_jvm_health
+    else
+      echo "Skipping the restart."
+    fi
+  else
+    # Check logs and suggest restart if necessary
+    check_logs_and_suggest_restart
+
+    # Check system health and JVM health
+    check_system_health
+    check_jvm_health
   fi
-
-  # Check logs and suggest restart if necessary
-  check_logs_and_suggest_restart
-
-  # Check system health and JVM health
-  check_system_health
-  check_jvm_health
 fi
